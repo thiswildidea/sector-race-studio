@@ -87,6 +87,9 @@
   #btnPreview:hover{background:rgba(6,182,212,.3)}
   #btnExport{background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff}
   #btnExport:hover{filter:brightness(1.12)}
+  #btnCover{background:rgba(90,130,220,.10);border-color:var(--line);color:var(--dim);
+    font-size:12.5px;font-weight:400;padding:9px}
+  #btnCover:hover{background:rgba(110,160,255,.22);color:var(--txt)}
   .act button:disabled{opacity:.4;cursor:not-allowed;filter:none}
 
   #status{margin-top:13px;padding:10px 12px;border-radius:9px;font-size:12px;line-height:1.65;
@@ -211,6 +214,7 @@
     <button id="btnFetch">① 获取数据</button>
     <button id="btnPreview" disabled>② 预览播放</button>
     <button id="btnExport" disabled>③ 导出 MP4</button>
+    <button id="btnCover" disabled>导出当前帧为封面 PNG</button>
   </div>
 
   <div id="status">选好板块后点「获取数据」。</div>
@@ -887,10 +891,65 @@ function inspectVideo(url){
   });
 }
 
+/* ==================== 配置持久化 ====================
+   只存参数，不存抓来的行情。UI 交互冒泡到 document 时统一落盘，
+   省得每个控件的回调里都写一遍 save。自选股另有独立的 key。 */
+const CFG_KEY = 'sectorRaceStudio.cfg';
+const PERSIST = ['list','custom','metric','months','start','end','dur','w','h','fps','mbps',
+                 'padL','padR','padB','hideTitle','title'];
+const SEG_KEY = { segList:'list', segMetric:'metric', segRange:'months',
+                  segRes:'w', segFps:'fps', segQ:'mbps' };
+let saveTimer = null;
+
+function saveCfg(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const keep = {};
+    for (const k of PERSIST) keep[k] = cfg[k];
+    try { localStorage.setItem(CFG_KEY, JSON.stringify(keep)); } catch (e){ /* 隐私模式忽略 */ }
+  }, 300);
+}
+['click','input','change'].forEach(ev => document.addEventListener(ev, saveCfg));
+
+function restoreCfg(){
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(CFG_KEY)); } catch (e){ /* 坏数据忽略 */ }
+  if (!saved) return;
+  for (const k of PERSIST) if (saved[k] !== undefined) cfg[k] = saved[k];
+
+  for (const [id, attr] of [['segList','list'],['segMetric','metric'],['segRange','m'],
+                            ['segRes','w'],['segFps','fps'],['segQ','q']]){
+    const box = $(id); if (!box) continue;
+    [...box.children].forEach(b => b.classList.toggle('on', String(b.dataset[attr]) === String(cfg[SEG_KEY[id]])));
+  }
+  $('picker').style.display   = cfg.list === 'custom' ? 'grid' : 'none';
+  $('stockBox').style.display = cfg.list === 'stocks' ? 'block' : 'none';
+  $('customRange').style.display = cfg.months === 0 ? 'flex' : 'none';
+  $('dStart').value = cfg.start; $('dEnd').value = cfg.end;
+  $('rDur').value = cfg.dur; $('vDur').textContent = cfg.dur + ' 秒';
+  $('cbNoTitle').checked = cfg.hideTitle;
+  $('tTitle').value = cfg.title; $('tTitle').disabled = cfg.hideTitle;
+  ['L','R','B'].forEach(k => { $('rPad'+k).value = cfg['pad'+k]; $('vPad'+k).textContent = cfg['pad'+k]; });
+  cv.width = cfg.w; cv.height = cfg.h;
+}
+
+/** 把画面上当前这一帧存成 PNG，用作投稿封面 */
+function exportCover(){
+  const metric = cfg.metric === 'ret' ? '涨幅' : '成交额';
+  cv.toBlob(blob => {
+    if (!blob){ setStatus('封面生成失败', 'err'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `封面_板块竞速_${listLabel()}_${metric}_${cfg.w}x${cfg.h}.png`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    setStatus(`封面已保存 · <b>${cfg.w}×${cfg.h}</b> PNG<br>存的就是预览里当前停着的这一帧。`, 'ok');
+  }, 'image/png');
+}
+
 /* ==================== 控件 ==================== */
 function setControls(on){
-  ['btnFetch','btnPreview','btnExport'].forEach(id => { $(id).disabled = !on; });
-  if (on && !DATA){ $('btnPreview').disabled = true; $('btnExport').disabled = true; }
+  ['btnFetch','btnPreview','btnExport','btnCover'].forEach(id => { $(id).disabled = !on; });
+  if (on && !DATA){ ['btnPreview','btnExport','btnCover'].forEach(id => { $(id).disabled = true; }); }
 }
 
 function bindSeg(id, fn){
@@ -987,7 +1046,7 @@ $('btnFetch').addEventListener('click', async () => {
     buildAnim();
     elapsed = 0; playing = false;
     renderFrame(anim.TOTAL);          // 先把成片最后一帧定格给用户看
-    $('btnPreview').disabled = false; $('btnExport').disabled = false;
+    $('btnPreview').disabled = false; $('btnExport').disabled = false; $('btnCover').disabled = false;
     $('tTitle').placeholder = `留空则用「${autoTitle()}」`;
 
     const vals = cfg.metric === 'ret' ? DATA.ret : DATA.amt;
@@ -1005,6 +1064,7 @@ $('btnFetch').addEventListener('click', async () => {
 });
 
 $('btnPreview').addEventListener('click', () => { if (anim){ elapsed=0; lastTs=null; playing=true; } });
+$('btnCover').addEventListener('click', exportCover);
 $('btnExport').addEventListener('click', () => {
   exportMp4().catch(e => {
     exporting=false; setControls(true);
@@ -1029,6 +1089,7 @@ $('btnExport').addEventListener('click', () => {
 /* 初始画面 */
 cfg.custom = LIST_L1.map(s => s.code);
 try { cfg.stocks = JSON.parse(localStorage.getItem(STOCK_KEY)) || []; } catch (e){ cfg.stocks = []; }
+restoreCfg();
 renderPicker();
 renderPicked();
 updateCount();
