@@ -51,6 +51,30 @@
   #picker label.on{color:var(--txt)}
   #pickCount{float:right;font-size:11.5px;color:var(--dim)}
 
+  .mini{padding:8px 12px;font:inherit;font-size:12.5px;color:#ffe0a8;cursor:pointer;white-space:nowrap;
+    background:rgba(245,158,11,.22);border:1px solid rgba(245,158,11,.45);border-radius:8px}
+  .mini:hover{background:rgba(245,158,11,.4)}
+
+  #searchWrap{position:relative;flex:1}
+  #sugg{position:absolute;top:calc(100% + 5px);left:0;right:0;z-index:50;display:none;
+    max-height:250px;overflow-y:auto;background:#131c33;border:1px solid var(--line);
+    border-radius:9px;box-shadow:0 12px 34px rgba(0,0,0,.6)}
+  #sugg div{display:flex;align-items:center;gap:9px;padding:8px 11px;font-size:12.5px;
+    cursor:pointer;border-bottom:1px solid rgba(120,150,210,.08)}
+  #sugg div:last-child{border-bottom:none}
+  #sugg div:hover,#sugg div.sel{background:rgba(245,158,11,.28)}
+  #sugg b{color:var(--txt);font-weight:600}
+  #sugg span{color:var(--dim);font-variant-numeric:tabular-nums}
+  #sugg em{font-style:normal;margin-left:auto;font-size:11px;padding:1px 7px;border-radius:4px;
+    background:rgba(245,158,11,.25);color:#fde68a}
+
+  #picked{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+  .chip{display:flex;align-items:center;gap:5px;padding:4px 8px;font-size:12px;
+    background:rgba(90,130,220,.12);border:1px solid var(--line);border-radius:999px;color:var(--dim)}
+  .chip b{font-weight:600;color:var(--txt)}
+  .chip i{font-style:normal;opacity:.5;padding-left:2px;cursor:pointer}
+  .chip i:hover{opacity:1;color:#fca5a5}
+
   .chk{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);cursor:pointer;margin-top:9px}
   .chk input{accent-color:var(--accent);width:14px;height:14px}
 
@@ -94,13 +118,25 @@
   <div class="sub">抖音竖屏 · 板块轮动一眼看完 · 导出 MP4</div>
 
   <div class="grp">
-    <label>板块清单 <span id="pickCount"></span></label>
+    <label>竞速对象 <span id="pickCount"></span></label>
     <div class="seg" id="segList">
       <button data-list="l1" class="on">中证一级</button>
       <button data-list="theme">热门主题</button>
-      <button data-list="custom">自定义</button>
+      <button data-list="custom">自定义板块</button>
+      <button data-list="stocks">自选股</button>
     </div>
     <div id="picker"></div>
+    <div id="stockBox" style="display:none">
+      <div class="row" style="margin-top:9px">
+        <div id="searchWrap">
+          <input type="text" id="code" autocomplete="off" spellcheck="false"
+                 placeholder="代码 / 名称 / 拼音，如 600519、茅台、maotai">
+          <div id="sugg"></div>
+        </div>
+        <button class="mini" id="btnAdd">加入</button>
+      </div>
+      <div id="picked"></div>
+    </div>
   </div>
 
   <div class="grp">
@@ -238,7 +274,7 @@ const MAX_ROWS = 16;   // 再多竖屏就挤成条形码了
 const MIN_ROWS = 3;
 
 /* ==================== 状态 ==================== */
-const cfg = { list:'l1', custom:[], metric:'ret', months:3, start:'', end:'',
+const cfg = { list:'l1', custom:[], stocks:[], metric:'ret', months:3, start:'', end:'',
               dur:60, w:1080, h:1920, fps:30, mbps:10,
               padL:50, padR:50, padB:250, hideTitle:false, title:'' };
 
@@ -300,11 +336,15 @@ const rgba = (c,a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 function currentList(){
   if (cfg.list === 'l1') return LIST_L1;
   if (cfg.list === 'theme') return LIST_THEME;
+  if (cfg.list === 'stocks') return cfg.stocks;
   return ALL_SECTORS.filter(s => cfg.custom.includes(s.code));
 }
 function listLabel(){
-  return cfg.list === 'l1' ? '中证一级行业' : cfg.list === 'theme' ? '热门主题板块' : '自选板块';
+  return cfg.list === 'l1' ? '中证一级行业'
+       : cfg.list === 'theme' ? '热门主题板块'
+       : cfg.list === 'stocks' ? '自选股' : '自选板块';
 }
+const unitWord = () => cfg.list === 'stocks' ? '只个股' : '个板块';
 
 function renderPicker(){
   const box = $('picker');
@@ -331,6 +371,110 @@ function updateCount(){
     : `已选 ${n} 个`;
 }
 
+/* ==================== 自选股检索 ==================== */
+const SEARCH_API = 'https://smartbox.gtimg.cn/s3/';
+const MARKET_LABEL = { sh:'沪', sz:'深', bj:'京', hk:'港', us:'美' };
+const STOCK_KEY = 'sectorRaceStudio.stocks';
+const SH3 = ['600','601','603','605','688','689','900'];
+const SZ3 = ['000','001','002','003','300','301','200'];
+
+function normalizeCode(raw){
+  const s = String(raw).trim().toLowerCase().replace(/\s+/g,'');
+  if (/^(sh|sz|bj|hk|us)/.test(s)) return s;
+  if (/^\d{6}$/.test(s)){
+    const p3 = s.slice(0,3);
+    if (SH3.includes(p3)) return 'sh' + s;
+    if (SZ3.includes(p3)) return 'sz' + s;
+    const p1 = s.slice(0,1);
+    if (p1 === '6') return 'sh' + s;
+    if (p1 === '0' || p1 === '3') return 'sz' + s;
+    return 'bj' + s;
+  }
+  if (/^\d{5}$/.test(s)) return 'hk' + s;
+  if (/^[a-z.]{1,6}$/.test(s)) return 'us' + s.toUpperCase();
+  return '';
+}
+
+/**
+ * 腾讯 smartbox 检索。两个坑：响应体是 GBK 但响应头谎称 utf-8，必须显式给
+ * script 指定 charset；且没有 CORS 头，fetch 会被拦，只能用 script 标签。
+ */
+function searchStock(q){
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.charset = 'GBK';
+    const timer = setTimeout(() => { cleanup(); reject(new Error('搜索超时')); }, 8000);
+    function cleanup(){ clearTimeout(timer); s.remove(); }
+    window.v_hint = '';
+    s.onload = () => {
+      const raw = String(window.v_hint || '');
+      cleanup();
+      if (!raw || raw === 'N') return resolve([]);
+      resolve(raw.split('^').map(it => {
+        const f = it.split('~');
+        return { market:f[0], num:f[1], name:f[2], type:f[4], code:(f[0]||'')+(f[1]||'') };
+      }).filter(r => r.num && r.name));
+    };
+    s.onerror = () => { cleanup(); reject(new Error('搜索请求失败')); };
+    s.src = SEARCH_API + '?v=2&t=all&q=' + encodeURIComponent(q);
+    document.head.appendChild(s);
+  });
+}
+
+let searchTimer = null, suggItems = [], suggIdx = -1;
+function hideSugg(){ $('sugg').style.display = 'none'; suggIdx = -1; }
+
+function renderSugg(list){
+  const box = $('sugg');
+  box.innerHTML = ''; suggItems = list; suggIdx = -1;
+  if (!list.length){ hideSugg(); return; }
+  list.forEach((r, i) => {
+    const d = document.createElement('div');
+    const b = document.createElement('b');     b.textContent = r.name;
+    const sp = document.createElement('span'); sp.textContent = r.num;
+    const em = document.createElement('em');
+    em.textContent = (MARKET_LABEL[r.market] || r.market) + (r.type === 'ZS' ? ' 指数' : '');
+    d.append(b, sp, em);
+    d.onmousedown = e => { e.preventDefault(); addStock(r.code, r.name); };
+    box.appendChild(d);
+  });
+  box.style.display = 'block';
+}
+
+// 接口返回的名称里可能带空格（如「五 粮 液」），会把画面上的名字撑开撞到数值
+const cleanName = s => String(s || '').replace(/\s+/g, '');
+
+function addStock(code, name){
+  code = normalizeCode(code);
+  name = cleanName(name);
+  if (!code){ setStatus('代码格式无法识别', 'err'); return; }
+  if (cfg.stocks.some(s => s.code === code)) { $('code').value = ''; hideSugg(); return; }
+  if (cfg.stocks.length >= MAX_ROWS){ setStatus(`最多 ${MAX_ROWS} 只`, 'err'); return; }
+  // 名称留空时先用代码占位，取到日线后会用接口返回的名称覆盖
+  cfg.stocks.push({ code, name: name || code.toUpperCase() });
+  localStorage.setItem(STOCK_KEY, JSON.stringify(cfg.stocks));
+  $('code').value = ''; hideSugg();
+  renderPicked(); updateCount();
+}
+
+function renderPicked(){
+  const box = $('picked');
+  box.innerHTML = '';
+  cfg.stocks.forEach(s => {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    const b = document.createElement('b'); b.textContent = s.name;
+    const x = document.createElement('i');  x.textContent = '×';
+    x.onclick = () => {
+      cfg.stocks = cfg.stocks.filter(v => v.code !== s.code);
+      localStorage.setItem(STOCK_KEY, JSON.stringify(cfg.stocks));
+      renderPicked(); updateCount();
+    };
+    chip.append(b, x);
+    box.appendChild(chip);
+  });
+}
+
 /* ==================== 取数 ==================== */
 function resolveRange(){
   const end = cfg.months === 0 ? cfg.end : todayISO();
@@ -347,8 +491,8 @@ function resolveRange(){
 
 async function loadData(){
   const list = currentList();
-  if (list.length < MIN_ROWS) throw new Error(`至少选 ${MIN_ROWS} 个板块才能竞速`);
-  if (list.length > MAX_ROWS) throw new Error(`最多 ${MAX_ROWS} 个板块，再多竖屏放不下`);
+  if (list.length < MIN_ROWS) throw new Error(`至少选 ${MIN_ROWS} ${unitWord()}才能竞速`);
+  if (list.length > MAX_ROWS) throw new Error(`最多 ${MAX_ROWS} ${unitWord()}，再多竖屏放不下`);
   const { start, end, days } = resolveRange();
 
   // 每个板块单独拉一次日线。串行是为了不把接口打崩，十几个请求几秒就完。
@@ -371,7 +515,14 @@ async function loadData(){
       const amtYi = parseFloat(b[8]) / 10000;    // 接口给的是万元
       if (close > 0) m.set(b[0], { close, amt: amtYi > 0 ? amtYi : 0 });
     }
-    raw.push({ ...it, m });
+    // 自选股是用户敲进来的，名称以接口返回的为准
+    const nm = cleanName(node.qt && node.qt[it.code] && node.qt[it.code][1]);
+    raw.push({ ...it, name: nm || it.name, m });
+  }
+  if (cfg.list === 'stocks'){
+    raw.forEach(s => { const t = cfg.stocks.find(x => x.code === s.code); if (t) t.name = s.name; });
+    localStorage.setItem(STOCK_KEY, JSON.stringify(cfg.stocks));
+    renderPicked();
   }
 
   // 只保留所有板块都有数据的交易日，避免某个板块缺一天就让名次凭空跳动
@@ -537,7 +688,7 @@ function drawHeader(t, st){
   drawSegments([
     { text: `${DATA.dates[0]} 至 ${DATA.dates[anim.N-1]} · `, color:'#8296b8' },
     { text: String(anim.N), color:'#ff6b6b', weight:'700' },
-    { text: ` 个交易日 · ${anim.K} 个板块`, color:'#8296b8' },
+    { text: ` 个交易日 · ${anim.K} ${unitWord()}`, color:'#8296b8' },
   ], W/2, H*0.188 - up, 26);
 
   ctx.fillStyle = '#fbbf24'; ctx.font = F(40,'600');
@@ -598,14 +749,20 @@ function drawRows(t, st){
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     ctx.fillText(DATA.list[r.k].name, x0 - 14*s, yc);
 
-    // 数值跟在条形末端外侧，负值就甩到左边
+    // 数值默认跟在条形末端外侧；条形够长时改画在内侧，否则最长的那根会把标签
+    // 顶出坐标区、压到左边的名字上（轴留白是按数值比例算的，挡不住固定宽度的标签）
     const txt = (cfg.metric === 'ret' && r.value > 0 ? '+' : '') + fmtNum(r.value, anim.dec) + anim.unit;
-    ctx.fillStyle = cfg.metric === 'ret'
-      ? (r.value >= 0 ? '#ff6b6b' : '#4ade80')
-      : rgba(c,1);
     ctx.font = F(valFont, '700');
-    if (vx >= zx){ ctx.textAlign = 'left';  ctx.fillText(txt, bx + w + 12*s, yc); }
-    else         { ctx.textAlign = 'right'; ctx.fillText(txt, bx - 12*s, yc); }
+    const inside = w >= ctx.measureText(txt).width + 26*s;
+    ctx.fillStyle = inside ? '#ffffff'
+      : cfg.metric === 'ret' ? (r.value >= 0 ? '#ff6b6b' : '#4ade80') : rgba(c,1);
+    if (vx >= zx){
+      ctx.textAlign = inside ? 'right' : 'left';
+      ctx.fillText(txt, inside ? bx + w - 13*s : bx + w + 12*s, yc);
+    } else {
+      ctx.textAlign = inside ? 'left' : 'right';
+      ctx.fillText(txt, inside ? bx + 13*s : bx - 12*s, yc);
+    }
 
     ctx.textBaseline = 'alphabetic';
     ctx.restore();
@@ -749,9 +906,36 @@ function bindSeg(id, fn){
 
 bindSeg('segList', b => {
   cfg.list = b.dataset.list;
-  $('picker').style.display = cfg.list === 'custom' ? 'grid' : 'none';
+  $('picker').style.display   = cfg.list === 'custom' ? 'grid' : 'none';
+  $('stockBox').style.display = cfg.list === 'stocks' ? 'block' : 'none';
   updateCount();
 });
+
+$('code').addEventListener('input', () => {
+  const q = $('code').value.trim();
+  clearTimeout(searchTimer);
+  if (!q){ hideSugg(); return; }
+  searchTimer = setTimeout(async () => {
+    try { renderSugg((await searchStock(q)).slice(0, 8)); } catch (e){ hideSugg(); }
+  }, 220);
+});
+$('code').addEventListener('keydown', e => {
+  const n = suggItems.length;
+  if (e.key === 'Escape'){ hideSugg(); return; }
+  if (e.key === 'Enter'){
+    e.preventDefault();
+    if (suggIdx >= 0 && suggItems[suggIdx]) addStock(suggItems[suggIdx].code, suggItems[suggIdx].name);
+    else addStock($('code').value, '');
+    return;
+  }
+  if (!n || $('sugg').style.display === 'none') return;
+  if (e.key === 'ArrowDown'){ e.preventDefault(); suggIdx = (suggIdx+1) % n; }
+  else if (e.key === 'ArrowUp'){ e.preventDefault(); suggIdx = (suggIdx-1+n) % n; }
+  else return;
+  [...$('sugg').children].forEach((c,i) => c.classList.toggle('sel', i === suggIdx));
+});
+$('code').addEventListener('blur', () => setTimeout(hideSugg, 120));
+$('btnAdd').addEventListener('click', () => addStock($('code').value, ''));
 bindSeg('segMetric', b => {
   cfg.metric = b.dataset.metric;
   if (DATA){ buildAnim(); renderFrame(lastFrameT); }
@@ -810,7 +994,7 @@ $('btnFetch').addEventListener('click', async () => {
     const last = vals.map((v,k) => ({ name: DATA.list[k].name, v: v[v.length-1] }))
                      .sort((a,b) => b.v - a.v);
     const u = anim.unit, d = anim.dec;
-    setStatus(`<b>${listLabel()}</b> · ${anim.K} 个板块 · ${anim.N} 个交易日<br>
+    setStatus(`<b>${listLabel()}</b> · ${anim.K} ${unitWord()} · ${anim.N} 个交易日<br>
                冠军 <b>${last[0].name}</b> ${fmtNum(last[0].v,d)}${u} ·
                垫底 <b>${last[last.length-1].name}</b> ${fmtNum(last[last.length-1].v,d)}${u}`, 'ok');
   } catch (err){
@@ -844,7 +1028,9 @@ $('btnExport').addEventListener('click', () => {
 
 /* 初始画面 */
 cfg.custom = LIST_L1.map(s => s.code);
+try { cfg.stocks = JSON.parse(localStorage.getItem(STOCK_KEY)) || []; } catch (e){ cfg.stocks = []; }
 renderPicker();
+renderPicked();
 updateCount();
 fitPreview();
 drawIntro();
