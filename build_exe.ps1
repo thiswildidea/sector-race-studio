@@ -12,7 +12,47 @@ $html = "sector_race_studio.html"
 $exe  = "行业板块竞速动画.exe"
 if (-not (Test-Path $html)) { throw "找不到应用本体：$html" }
 
-if (-not (Test-Path "app.ico")) { python gen_icon.py }
+# ---- 生成 app.ico ----
+# 坑 1: 不能直接调 python。本机 PATH 里的 python 是微软商店占位程序
+#       (WindowsApps\python.exe),跑它会直接返回 9009,脚本一行都没执行。
+# 坑 2: 不能只判断 app.ico 不存在时才生成,否则改完 gen_icon.py 永远不生效。
+function Get-PythonExe {
+    $cands = @()
+    $cands += (Get-Command python.exe -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+    $cands += (Get-Command python     -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+    $cands += @(
+        "$HOME\.conda\envs\PythonGUI\python.exe",          # 本机 Conda 环境(优先)
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "C:\Python313\python.exe", "C:\Python312\python.exe", "C:\Python311\python.exe",
+        "$HOME\.workbuddy\binaries\python\versions\3.13.12\python.exe",
+        "$HOME\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+    )
+    foreach ($c in ($cands | Where-Object { $_ } | Select-Object -Unique)) {
+        if ($c -match 'WindowsApps') { continue }          # 排除商店占位程序
+        if (-not (Test-Path -LiteralPath $c)) { continue }
+        & $c -c "import zlib, struct" 2>$null              # 真跑一次才算数
+        if ($LASTEXITCODE -eq 0) { return $c }
+    }
+    return $null
+}
+
+$py = Get-PythonExe
+if ($py) {
+    Write-Host ("生成图标: {0}" -f $py)
+    & $py gen_icon.py
+    if ($LASTEXITCODE -ne 0) { throw "gen_icon.py 执行失败(退出码 $LASTEXITCODE)" }
+} elseif (Test-Path "app.ico") {
+    Write-Warning "未找到可用的 Python,沿用已有的 app.ico(图标可能已过期)"
+} else {
+    throw @"
+未找到可用的 Python,无法生成 app.ico。请二选一:
+  1) 安装 Python 后重跑本脚本;
+  2) 手动放一个 app.ico 到本目录。
+"@
+}
+if (-not (Test-Path "app.ico")) { throw "app.ico 未生成,无法设置 exe 图标" }
 
 & $csc `
   /nologo /target:winexe /optimize+ /codepage:65001 `

@@ -126,6 +126,11 @@
 .\build_exe.ps1
 ```
 
+图标由 `gen_icon.py` 在打包时生成，脚本会自己找可用的 Python：先试 PATH，再试
+Conda / 官方安装路径，**跳过 `WindowsApps` 的商店占位程序**（调它直接返回 9009，
+脚本一行都跑不了）。每次打包都重新生成 `app.ico`，所以改完 `gen_icon.py` 立刻生效；
+实在找不到 Python 时，已有 `app.ico` 就沿用并告警，没有则报错停下。
+
 ---
 
 ## 已知限制
